@@ -45,13 +45,12 @@ jobs:
             Write-Host "Successfully cleared memoverride.cpp"
         }
 
-    # 4. Создаем файл свойств MSBuild, чтобы принудительно отключить строгие стандарты C++20/C++17
+    # 4. Создаем файл свойств MSBuild в чистой кодировке ASCII (без BOM), чтобы не ломать парсер
     - name: Create MSBuild Override Properties File
       shell: powershell
       run: |
         $propsContent = @"
-        <?xml version="1.0" encoding="utf-8"?>
-        <Project ToolsVersion="4.0" xmlns="http://microsoft.com">
+        <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
           <ItemDefinitionGroup>
             <ClCompile>
               <ConformanceMode>false</ConformanceMode>
@@ -62,9 +61,9 @@ jobs:
           </ItemDefinitionGroup>
         </Project>
         "@
-        # Сохраняем файл в корневом каталоге сборки
-        Set-Content -Path "ForceFlags.props" -Value $propsContent -Encoding utf8
-        Write-Host "Successfully created ForceFlags.props configuration file."
+        # Избегаем UTF-8 BOM, принудительно сохраняя файл как ASCII
+        [System.IO.File]::WriteAllText("$pwd\ForceFlags.props", $propsContent, [System.Text.Encoding]::ASCII)
+        Write-Host "Successfully created ForceFlags.props configuration file in ASCII."
 
     # 5. Находим MSBuild
     - name: Setup MSBuild
@@ -79,7 +78,7 @@ jobs:
         $devenv = & $vswhere -latest -property productPath
         Start-Process -FilePath $devenv -ArgumentList @("${{ env.SOLUTION_PATH }}", "/Upgrade") -Wait -NoNewWindow
 
-    # 7. Запускаем компиляцию с подключением нашего файла свойств ForceFlags.props
+    # 7. Запускаем компиляцию с подключением нашего файла свойств
     - name: Build Solution
       shell: cmd
       run: |
