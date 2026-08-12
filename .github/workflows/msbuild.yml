@@ -5,7 +5,7 @@ on:
     branches: [ "master", "main" ]
   pull_request:
     branches: [ "master", "main" ]
-  workflow_dispatch: # Позволяет запускать сборку вручную кнопкой в интерфейсе GitHub
+  workflow_dispatch:
 
 jobs:
   build-windows:
@@ -17,13 +17,13 @@ jobs:
       BUILD_PLATFORM: "Win32"
 
     steps:
-    # 1. Скачиваем исходный код репозитория
+    # 1. Скачиваем исходный код
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        fetch-depth: 1 # Экономит время на скачивании истории коммитов
+        fetch-depth: 1
 
-    # 2. Настраиваем кэширование для ускорения повторных сборок
+    # 2. Настраиваем кэширование
     - name: Cache build artifacts
       uses: actions/cache@v4
       with:
@@ -35,44 +35,57 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-source-sdk-
 
-    # 3. Полностью очищаем memoverride.cpp, чтобы обойти несовместимость со старой CRT
+    # 3. Полностью очищаем memoverride.cpp для обхода старых хуков CRT
     - name: Clean memoverride.cpp for modern MSVC
       shell: powershell
       run: |
         $filePath = "src/public/tier0/memoverride.cpp"
         if (Test-Path $filePath) {
-            # Очищаем содержимое файла, делая его пустым
             Clear-Content -Path $filePath
-            Write-Host "Successfully cleared memoverride.cpp to bypass legacy CRT hooks."
-        } else {
-            Write-Warning "Warning: memoverride.cpp not found at $filePath. Skipping clean step."
+            Write-Host "Successfully cleared memoverride.cpp"
         }
 
-    # 4. Находим актуальный MSBuild на виртуальной машине
+    # 4. Создаем файл свойств MSBuild, чтобы принудительно отключить строгие стандарты C++20/C++17
+    - name: Create MSBuild Override Properties File
+      shell: powershell
+      run: |
+        $propsContent = @"
+        <?xml version="1.0" encoding="utf-8"?>
+        <Project ToolsVersion="4.0" xmlns="http://microsoft.com">
+          <ItemDefinitionGroup>
+            <ClCompile>
+              <ConformanceMode>false</ConformanceMode>
+              <LanguageStandard>stdcpp14</LanguageStandard>
+              <AdditionalOptions>/permissive %(AdditionalOptions)</AdditionalOptions>
+              <TreatWarningAsError>false</TreatWarningAsError>
+            </ClCompile>
+          </ItemDefinitionGroup>
+        </Project>
+        "@
+        # Сохраняем файл в корневом каталоге сборки
+        Set-Content -Path "ForceFlags.props" -Value $propsContent -Encoding utf8
+        Write-Host "Successfully created ForceFlags.props configuration file."
+
+    # 5. Находим MSBuild
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    # 5. Конвертируем древний формат .sln/.vcproj (VS2008) в современный .vcxproj (VS2022)
+    # 6. Конвертируем .sln/.vcproj в современный .vcxproj
     - name: Upgrade Legacy VS2008 Solution to Modern Format
       shell: powershell
       run: |
         $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-        if (-not (Test-Path $vswhere)) {
-            $vswhere = "${env:ProgramFiles}\Microsoft Visual Studio\Installer\vswhere.exe"
-        }
+        if (-not (Test-Path $vswhere)) { $vswhere = "${env:ProgramFiles}\Microsoft Visual Studio\Installer\vswhere.exe" }
         $devenv = & $vswhere -latest -property productPath
-        echo "Found Visual Studio DevEnv at: $devenv"
-        
-        # Запуск конвертации формата решения и проектов
         Start-Process -FilePath $devenv -ArgumentList @("${{ env.SOLUTION_PATH }}", "/Upgrade") -Wait -NoNewWindow
 
-    # 6. Запускаем компиляцию (клиентская и серверная библиотеки мода)
+    # 7. Запускаем компиляцию с подключением нашего файла свойств ForceFlags.props
     - name: Build Solution
       shell: cmd
       run: |
-        msbuild "${{ env.SOLUTION_PATH }}" /p:Configuration="${{ env.BUILD_CONFIGURATION }}" /p:Platform="${{ env.BUILD_PLATFORM }}" /p:BuildInParallel=true /m:2 /p:TrackFileAccess=false /p:TreatWarningAsError=false /p:IgnoreDefaultLibraryNames="libc;libcd"
+        msbuild "${{ env.SOLUTION_PATH }}" /p:Configuration="${{ env.BUILD_CONFIGURATION }}" /p:Platform="${{ env.BUILD_PLATFORM }}" /p:BuildInParallel=true /m:2 /p:TrackFileAccess=false /p:ForceImportBeforeCppTargets="%CD%\ForceFlags.props" /p:IgnoreDefaultLibraryNames="libc;libcd"
 
-    # 7. Сохраняем скомпилированные библиотеки client.dll и server.dll в артефакты GitHub
+    # 8. Сохраняем готовые client.dll и server.dll
     - name: Upload Build Artifacts
       uses: actions/upload-artifact@v4
       with:
