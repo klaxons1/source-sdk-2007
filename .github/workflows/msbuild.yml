@@ -1,0 +1,70 @@
+name: Build Source SDK 2007 Mod
+
+on:
+  push:
+    branches: [ "master", "main" ]
+  pull_request:
+    branches: [ "master", "main" ]
+  workflow_dispatch: # Позволяет запускать сборку вручную одной кнопкой в интерфейсе GitHub
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    env:
+      SOLUTION_PATH: "src/game_episodic-2005.sln"
+      BUILD_CONFIGURATION: "Release"
+      BUILD_PLATFORM: "Win32"
+
+    steps:
+    # 1. Стягиваем исходный код репозитория
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 1 # Экономит время на скачивании истории коммитов
+
+    # 2. Настраиваем кэширование объектных файлов для ускорения повторных сборок
+    - name: Cache build artifacts
+      uses: actions/cache@v4
+      with:
+        path: |
+          src/game/client/Release_*
+          src/game/server/Release_*
+          src/obj
+        key: ${{ runner.os }}-source-sdk-${{ hashFiles('**/*.cpp', '**/*.h') }}
+        restore-keys: |
+          ${{ runner.os }}-source-sdk-
+
+    # 3. Находим актуальный MSBuild на виртуальной машине
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+
+    # 4. Находим devenv.exe и конвертируем древний .vcproj/.sln в современный .vcxproj
+    - name: Upgrade Legacy VS2008 Solution to Modern Format
+      shell: powershell
+      run: |
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        if (-not (Test-Path $vswhere)) {
+            $vswhere = "${env:ProgramFiles}\Microsoft Visual Studio\Installer\vswhere.exe"
+        }
+        $devenv = & $vswhere -latest -property productPath
+        echo "Found Visual Studio DevEnv at: $devenv"
+        
+        # Запуск автоматической конвертации формата 2008 в формат текущей Visual Studio
+        Start-Process -FilePath $devenv -ArgumentList @("${{ env.SOLUTION_PATH }}", "/Upgrade") -Wait -NoNewWindow
+
+    # 5. Собираем проект (клиентскую и серверную часть)
+    - name: Build Solution
+      shell: cmd
+      run: |
+        msbuild "${{ env.SOLUTION_PATH }}" /p:Configuration="${{ env.BUILD_CONFIGURATION }}" /p:Platform="${{ env.BUILD_PLATFORM }}" /p:BuildInParallel=true /m:2 /p:TrackFileAccess=false
+
+    # 6. Загружаем скомпилированные бинарники (client.dll и server.dll) в артефакты GitHub
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: source-sdk-2007-binaries
+        path: |
+          src/game/client/*_episodic.dll
+          src/game/server/*_episodic.dll
+        if-no-files-found: warn
