@@ -17,13 +17,13 @@ jobs:
       BUILD_PLATFORM: "Win32"
 
     steps:
-    # 1. Стягиваем исходный код репозитория
+    # 1. Клонируем исходный код репозитория
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        fetch-depth: 1 # Экономит время на скачивании истории коммитов
+        fetch-depth: 1 # Экономия времени на скачивании истории коммитов
 
-    # 2. Настраиваем кэширование объектных файлов для ускорения повторных сборок
+    # 2. Настраиваем кэширование для ускорения повторных сборок
     - name: Cache build artifacts
       uses: actions/cache@v4
       with:
@@ -35,11 +35,26 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-source-sdk-
 
-    # 3. Находим актуальный MSBuild на виртуальной машине
+    # 3. Принудительно отключаем устаревшие хуки памяти Valve для совместимости с MSVC 2022
+    - name: Patch memoverride.cpp for modern MSVC
+      shell: powershell
+      run: |
+        $filePath = "src/public/tier0/memoverride.cpp"
+        if (Test-Path $filePath) {
+            $content = Get-Content $filePath -Raw
+            # Вставляем макрос отключения хуков в самое начало файла
+            $patchedContent = "#define NO_MEMOVERRIDE`r`n" + $content
+            Set-Content -Path $filePath -Value $patchedContent -Encoding utf8
+            Write-Host "Successfully patched memoverride.cpp with NO_MEMOVERRIDE"
+        } else {
+            Write-Warning "Warning: memoverride.cpp not found at $filePath. Skipping patch step."
+        }
+
+    # 4. Находим актуальный MSBuild на виртуальной машине
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    # 4. Находим devenv.exe и конвертируем древний .vcproj/.sln в современный .vcxproj
+    # 5. Автоматически конвертируем древний формат .sln/.vcproj (VS2008) в современный .vcxproj (VS2022)
     - name: Upgrade Legacy VS2008 Solution to Modern Format
       shell: powershell
       run: |
@@ -50,16 +65,16 @@ jobs:
         $devenv = & $vswhere -latest -property productPath
         echo "Found Visual Studio DevEnv at: $devenv"
         
-        # Запуск автоматической конвертации формата 2008 в формат текущей Visual Studio
+        # Запуск конвертации формата решения и проектов
         Start-Process -FilePath $devenv -ArgumentList @("${{ env.SOLUTION_PATH }}", "/Upgrade") -Wait -NoNewWindow
 
-    # 5. Собираем проект (клиентскую и серверную часть)
+    # 6. Запускаем компиляцию (клиентская и серверная библиотеки мода)
     - name: Build Solution
       shell: cmd
       run: |
         msbuild "${{ env.SOLUTION_PATH }}" /p:Configuration="${{ env.BUILD_CONFIGURATION }}" /p:Platform="${{ env.BUILD_PLATFORM }}" /p:BuildInParallel=true /m:2 /p:TrackFileAccess=false
 
-    # 6. Загружаем скомпилированные бинарники (client.dll и server.dll) в артефакты GitHub
+    # 7. Сохраняем скомпилированные client.dll и server.dll в артефакты сборки GitHub
     - name: Upload Build Artifacts
       uses: actions/upload-artifact@v4
       with:
