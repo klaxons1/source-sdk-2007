@@ -5,7 +5,7 @@ on:
     branches: [ "master", "main" ]
   pull_request:
     branches: [ "master", "main" ]
-  workflow_dispatch: # Позволяет запускать сборку вручную одной кнопкой в интерфейсе GitHub
+  workflow_dispatch: # Позволяет запускать сборку вручную кнопкой в интерфейсе GitHub
 
 jobs:
   build-windows:
@@ -17,11 +17,11 @@ jobs:
       BUILD_PLATFORM: "Win32"
 
     steps:
-    # 1. Клонируем исходный код репозитория
+    # 1. Скачиваем исходный код репозитория
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        fetch-depth: 1 # Экономия времени на скачивании истории коммитов
+        fetch-depth: 1 # Экономит время на скачивании истории коммитов
 
     # 2. Настраиваем кэширование для ускорения повторных сборок
     - name: Cache build artifacts
@@ -35,26 +35,24 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-source-sdk-
 
-    # 3. Принудительно отключаем устаревшие хуки памяти Valve для совместимости с MSVC 2022
-    - name: Patch memoverride.cpp for modern MSVC
+    # 3. Полностью очищаем memoverride.cpp, чтобы обойти несовместимость со старой CRT
+    - name: Clean memoverride.cpp for modern MSVC
       shell: powershell
       run: |
         $filePath = "src/public/tier0/memoverride.cpp"
         if (Test-Path $filePath) {
-            $content = Get-Content $filePath -Raw
-            # Вставляем макрос отключения хуков в самое начало файла
-            $patchedContent = "#define NO_MEMOVERRIDE`r`n" + $content
-            Set-Content -Path $filePath -Value $patchedContent -Encoding utf8
-            Write-Host "Successfully patched memoverride.cpp with NO_MEMOVERRIDE"
+            # Очищаем содержимое файла, делая его пустым
+            Clear-Content -Path $filePath
+            Write-Host "Successfully cleared memoverride.cpp to bypass legacy CRT hooks."
         } else {
-            Write-Warning "Warning: memoverride.cpp not found at $filePath. Skipping patch step."
+            Write-Warning "Warning: memoverride.cpp not found at $filePath. Skipping clean step."
         }
 
     # 4. Находим актуальный MSBuild на виртуальной машине
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    # 5. Автоматически конвертируем древний формат .sln/.vcproj (VS2008) в современный .vcxproj (VS2022)
+    # 5. Конвертируем древний формат .sln/.vcproj (VS2008) в современный .vcxproj (VS2022)
     - name: Upgrade Legacy VS2008 Solution to Modern Format
       shell: powershell
       run: |
@@ -72,9 +70,9 @@ jobs:
     - name: Build Solution
       shell: cmd
       run: |
-        msbuild "${{ env.SOLUTION_PATH }}" /p:Configuration="${{ env.BUILD_CONFIGURATION }}" /p:Platform="${{ env.BUILD_PLATFORM }}" /p:BuildInParallel=true /m:2 /p:TrackFileAccess=false
+        msbuild "${{ env.SOLUTION_PATH }}" /p:Configuration="${{ env.BUILD_CONFIGURATION }}" /p:Platform="${{ env.BUILD_PLATFORM }}" /p:BuildInParallel=true /m:2 /p:TrackFileAccess=false /p:TreatWarningAsError=false /p:IgnoreDefaultLibraryNames="libc;libcd"
 
-    # 7. Сохраняем скомпилированные client.dll и server.dll в артефакты сборки GitHub
+    # 7. Сохраняем скомпилированные библиотеки client.dll и server.dll в артефакты GitHub
     - name: Upload Build Artifacts
       uses: actions/upload-artifact@v4
       with:
